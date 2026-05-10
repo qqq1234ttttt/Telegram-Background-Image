@@ -1,7 +1,2 @@
-# Telegram Background Removal Bot
-
-ဒီ Bot က Telegram မှာ လက်ခံရရှိတဲ့ ဓာတ်ပုံတွေရဲ့ နောက်ခံကို ဖျောက်ပေးပြီး သင်ရွေးချယ်လိုက်တဲ့ အရောင်နဲ့ အစားထိုးပေးပါတယ်။
-
-## လုပ်ဆောင်ချက်များ
-*   `/start` - Bot ကို စတင်ပါ။
-*   ဓာတ်ပုံတစ်ပုံ ပို့လိုက်ရုံပါပဲ။
+# Telegram Background Remover Bot
+Uses Remove.bg API + Render.com
