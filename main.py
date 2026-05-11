@@ -56,28 +56,39 @@ def handle_photo(message):
             file_info = bot.get_file(message.photo[-1].file_id)
             downloaded_img = bot.download_file(file_info.file_path)
 
-            # Call Remove.bg API
-response = requests.post(
-    'https://api.remove.bg/v1.0/removebg',
-    files={'image_file': downloaded_img},
-    data={
-        'size': 'auto',
-        'format': 'png'           # 1️⃣ PNG format အတိအကျသတ်မှတ်ပါ
-    },
-    headers={'X-Api-Key': REMOVE_BG_API_KEY},
-)
+            # ⭐⭐⭐ FORCE PNG OUTPUT - FIXED VERSION ⭐⭐⭐
+            response = requests.post(
+                'https://api.remove.bg/v1.0/removebg',
+                files={'image_file': ('image.png', downloaded_img, 'image/png')},
+                data={
+                    'size': 'auto',
+                    'format': 'png',
+                    'image_file': 'image.png'
+                },
+                headers={'X-Api-Key': REMOVE_BG_API_KEY},
+            )
 
             if response.status_code != 200:
                 bot.reply_to(message, f"❌ API Error: {response.status_code}")
                 return
 
-            # Convert result to PIL image (transparent background)
-            foreground_no_bg = Image.open(io.BytesIO(response.content)).convert('RGBA')
+            # Log content type for debugging
+            content_type = response.headers.get('Content-Type', '')
+            print(f"Content-Type: {content_type}")
 
-            # Save temporarily to send to user
+            # Save as PNG
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                foreground_no_bg.save(tmp.name)
+                tmp.write(response.content)
                 temp_path = tmp.name
+
+            # Check image mode
+            img_check = Image.open(temp_path)
+            print(f"Image Mode: {img_check.mode}")  # Should be RGBA for transparent
+
+            # Ensure RGBA mode (transparent)
+            if img_check.mode != 'RGBA':
+                img_check = img_check.convert('RGBA')
+                img_check.save(temp_path)
 
             # Send the transparent background image to user
             with open(temp_path, "rb") as f:
@@ -88,14 +99,14 @@ response = requests.post(
                 )
 
             # Store the image for later composition
-            user_foreground_no_bg[chat_id] = foreground_no_bg
+            user_foreground_no_bg[chat_id] = Image.open(temp_path).convert('RGBA')
             user_state[chat_id] = 1
 
             # Cleanup temp file
             os.unlink(temp_path)
 
         except Exception as e:
-            bot.reply_to(message, "❌ အမှားဖြစ်သွားပါသည်။ /start နဲ့ ပြန်စပါ။")
+            bot.reply_to(message, f"❌ အမှားဖြစ်သွားပါသည်။ /start နဲ့ ပြန်စပါ။")
             print(f"Error: {e}")
 
     # Case 2: User sends background image (after receiving first result)
