@@ -17,67 +17,43 @@ if not TELEGRAM_TOKEN or not REMOVE_BG_API_KEY:
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# User state management
-user_state = {}      # 0 = waiting for bg, 1 = waiting for main image
-user_bg_path = {}    # store background image temp path
+# User state: 0 = waiting for background image (after foreground removed)
+# user_foreground stores the removed background image (PNG with transparency)
+user_state = {}
+user_foreground_no_bg = {}  # store the image with background removed (PIL Image)
 
 # ==================== 2. WEBHOOK ENDPOINT ====================
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        # Get update from Telegram
         json_str = request.get_data().decode('UTF-8')
         update = telebot.types.Update.de_json(json_str)
-        
-        # Process the update
         bot.process_new_updates([update])
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         print(f"Webhook error: {e}")
         return jsonify({"status": "error"}), 500
 
-# ==================== 3. BOT HANDLERS (same as before) ====================
+# ==================== 3. BOT HANDLERS ====================
 @bot.message_handler(commands=["start", "reset"])
 def start_handler(message):
     chat_id = message.chat.id
     user_state[chat_id] = 0
-    if chat_id in user_bg_path:
-        try:
-            os.unlink(user_bg_path[chat_id])
-        except:
-            pass
-        del user_bg_path[chat_id]
-    bot.send_message(chat_id, "👋 နှုတ်ဆက်ပါတယ်။\n\nအဆင့် ၁: နောက်ခံအနေနဲ့ ထားချင်တဲ့ ပုံကို အရင်ပို့ပေးပါ။")
+    if chat_id in user_foreground_no_bg:
+        del user_foreground_no_bg[chat_id]
+    bot.send_message(chat_id, "👋 နှုတ်ဆက်ပါတယ်။\n\nနောက်ခံဖျက်ချင်တဲ့ ပုံကို ပို့ပေးပါ။")
 
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
     chat_id = message.chat.id
     state = user_state.get(chat_id, 0)
 
+    # Case 1: User sends first photo (need to remove background)
     if state == 0:
-        # Download background image
-        file_info = bot.get_file(message.photo[-1].file_id)
-        downloaded = bot.download_file(file_info.file_path)
-
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            tmp.write(downloaded)
-            bg_path = tmp.name
-
-        user_bg_path[chat_id] = bg_path
-        user_state[chat_id] = 1
-
-        bot.reply_to(message, "✅ နောက်ခံပုံကို သိမ်းဆည်းပြီးပါပြီ။\n\nအဆင့် ၂: နောက်ခံဖျောက်ချင်တဲ့ ပုံကို ပို့ပေးပါ။")
-
-    elif state == 1:
-        if chat_id not in user_bg_path:
-            bot.reply_to(message, "⚠️ နောက်ခံပုံ မရှိပါ။ /start နဲ့ ပြန်စပါ။")
-            user_state[chat_id] = 0
-            return
-
-        bot.reply_to(message, "⏳ ပုံကို လုပ်ဆောင်နေပါပြီ...")
+        bot.reply_to(message, "⏳ နောက်ခံဖျက်နေပါပြီ... ခဏစောင့်ပါ။")
 
         try:
-            # Download main image
+            # Download the image
             file_info = bot.get_file(message.photo[-1].file_id)
             downloaded_img = bot.download_file(file_info.file_path)
 
@@ -93,13 +69,53 @@ def handle_photo(message):
                 bot.reply_to(message, f"❌ API Error: {response.status_code}")
                 return
 
-            foreground = Image.open(io.BytesIO(response.content)).convert('RGBA')
+            # Convert result to PIL image (background removed, transparency preserved)
+            foreground_no_bg = Image.open(io.BytesIO(response.content)).convert('RGBA')
 
-            # Load and resize background
-            background = Image.open(user_bg_path[chat_id]).convert('RGBA')
+            # Save temporarily to send to user
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                foreground_no_bg.save(tmp.name)
+                temp_path = tmp.name
+
+            # Send the background-removed image to user
+            with open(temp_path, "rb") as f:
+                bot.send_photo(chat_id, f, caption="✅ နောက်ခံဖျက်ပြီးသား ပုံပါ။\n\nအခု ဒီပုံပေါ်မှာ ထည့်ချင်တဲ့ **နောက်ခံပုံ** ကို ထပ်ပို့ပေးပါ။")
+
+            # Store the image (without background) for later use
+            user_foreground_no_bg[chat_id] = foreground_no_bg
+            user_state[chat_id] = 1
+
+            # Cleanup temp file
+            os.unlink(temp_path)
+
+        except Exception as e:
+            bot.reply_to(message, "❌ အမှားဖြစ်သွားပါသည်။ /start နဲ့ ပြန်စပါ။")
+            print(f"Error: {e}")
+
+    # Case 2: User sends background image (after receiving first result)
+    elif state == 1:
+        if chat_id not in user_foreground_no_bg:
+            bot.reply_to(message, "⚠️ နောက်ခံဖျက်ပြီးသားပုံ မရှိပါ။ /start နဲ့ ပြန်စပါ။")
+            user_state[chat_id] = 0
+            return
+
+        bot.reply_to(message, "⏳ နောက်ခံပုံနဲ့ ပေါင်းနေပါပြီ...")
+
+        try:
+            # Download background image from user
+            file_info = bot.get_file(message.photo[-1].file_id)
+            downloaded_bg = bot.download_file(file_info.file_path)
+
+            # Load background image
+            background = Image.open(io.BytesIO(downloaded_bg)).convert('RGBA')
+
+            # Get the foreground image (background already removed)
+            foreground = user_foreground_no_bg[chat_id]
+
+            # Resize background to match foreground size
             background = ImageOps.fit(background, foreground.size, method=Image.Resampling.LANCZOS)
 
-            # Composite
+            # Composite: put foreground on top of background
             result = Image.alpha_composite(background, foreground)
 
             # Save result
@@ -107,26 +123,25 @@ def handle_photo(message):
                 result.save(tmp.name)
                 result_path = tmp.name
 
-            # Send result
+            # Send final result
             with open(result_path, "rb") as f:
                 bot.send_photo(chat_id, f, caption="✅ ပြီးပါပြီ။ /start နဲ့ ထပ်လုပ်ပါ။")
 
             # Cleanup
             os.unlink(result_path)
-            os.unlink(user_bg_path[chat_id])
-            del user_bg_path[chat_id]
+            del user_foreground_no_bg[chat_id]
             user_state[chat_id] = 0
 
         except Exception as e:
             bot.reply_to(message, "❌ အမှားဖြစ်သွားပါသည်။ /start နဲ့ ပြန်စပါ။")
             print(f"Error: {e}")
-            if chat_id in user_bg_path:
-                try:
-                    os.unlink(user_bg_path[chat_id])
-                except:
-                    pass
-                del user_bg_path[chat_id]
+            if chat_id in user_foreground_no_bg:
+                del user_foreground_no_bg[chat_id]
             user_state[chat_id] = 0
+
+    else:
+        bot.reply_to(message, "📌 /start နှိပ်ပြီး ပြန်စတင်ပါ။")
+        user_state[chat_id] = 0
 
 @bot.message_handler(func=lambda m: True)
 def unknown(message):
@@ -137,7 +152,7 @@ if __name__ == "__main__":
     # Remove any existing webhook
     bot.remove_webhook()
     
-    # Set webhook (Render provides PORT env variable)
+    # Set webhook
     port = int(os.environ.get("PORT", "10000"))
     webhook_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')}/webhook"
     
