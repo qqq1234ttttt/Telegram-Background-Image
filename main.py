@@ -17,8 +17,7 @@ if not TELEGRAM_TOKEN or not REMOVE_BG_API_KEY:
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# User state: 0 = waiting for background image (after foreground removed)
-# user_foreground stores the removed background image (PNG with transparency)
+# User state: 0 = waiting for first image, 1 = waiting for background image
 user_state = {}
 user_foreground_no_bg = {}  # store the image with background removed (PIL Image)
 
@@ -50,18 +49,22 @@ def handle_photo(message):
 
     # Case 1: User sends first photo (need to remove background)
     if state == 0:
-        bot.reply_to(message, "⏳ နောက်ခံဖျက်နေပါပြီ... ခဏစောင့်ပါ။")
+        bot.reply_to(message, "⏳ နောက်ခံဖျက်နေပါပြီ...")
 
         try:
             # Download the image
             file_info = bot.get_file(message.photo[-1].file_id)
             downloaded_img = bot.download_file(file_info.file_path)
 
-            # Call Remove.bg API
+            # Call Remove.bg API with transparent background
             response = requests.post(
                 'https://api.remove.bg/v1.0/removebg',
                 files={'image_file': ('image.png', downloaded_img, 'image/png')},
-                data={'size': 'auto'},
+                data={
+                    'size': 'auto',
+                    'format': 'png',
+                    'bg_color': 'rgba(0,0,0,0)'   # 🔑 FORCE FULLY TRANSPARENT BACKGROUND
+                },
                 headers={'X-Api-Key': REMOVE_BG_API_KEY},
             )
 
@@ -69,7 +72,7 @@ def handle_photo(message):
                 bot.reply_to(message, f"❌ API Error: {response.status_code}")
                 return
 
-            # Convert result to PIL image (background removed, transparency preserved)
+            # Convert result to PIL image (transparent background)
             foreground_no_bg = Image.open(io.BytesIO(response.content)).convert('RGBA')
 
             # Save temporarily to send to user
@@ -77,11 +80,17 @@ def handle_photo(message):
                 foreground_no_bg.save(tmp.name)
                 temp_path = tmp.name
 
-            # Send the background-removed image to user
+            # Send the transparent background image to user
             with open(temp_path, "rb") as f:
-                bot.send_photo(chat_id, f, caption="✅ နောက်ခံဖျက်ပြီးသား ပုံပါ။\n\nအခု ဒီပုံပေါ်မှာ ထည့်ချင်တဲ့ **နောက်ခံပုံ** ကို ထပ်ပို့ပေးပါ။")
+                bot.send_photo(
+                    chat_id, 
+                    f, 
+                    caption="✅ နောက်ခံဖျက်ပြီးသား ပုံပါ (နောက်ခံပွင့်လင်းမြင်သာနေပါမည်။)\n\n"
+                            "📌 ဒီပုံကို Save လိုက်ရင် PNG format အတိုင်း နောက်ခံမပါဘဲ သိမ်းမှာပါ။\n\n"
+                            "အခု ဒီပုံပေါ်မှာ ထည့်ချင်တဲ့ **နောက်ခံပုံ** ကို ထပ်ပို့ပေးပါ။"
+                )
 
-            # Store the image (without background) for later use
+            # Store the image for later composition
             user_foreground_no_bg[chat_id] = foreground_no_bg
             user_state[chat_id] = 1
 
@@ -149,15 +158,9 @@ def unknown(message):
 
 # ==================== 4. START SERVER ====================
 if __name__ == "__main__":
-    # Remove any existing webhook
     bot.remove_webhook()
-    
-    # Set webhook
     port = int(os.environ.get("PORT", "10000"))
     webhook_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')}/webhook"
-    
     bot.set_webhook(url=webhook_url)
     print(f"Webhook set to: {webhook_url}")
-    
-    # Start Flask server
     app.run(host='0.0.0.0', port=port)
