@@ -51,7 +51,7 @@ def handle_photo(message):
             file_info = bot.get_file(message.photo[-1].file_id)
             downloaded_img = bot.download_file(file_info.file_path)
 
-            # API call
+            # 1. Call API with base64
             encoded_img = base64.b64encode(downloaded_img).decode('utf-8')
             response = requests.post(
                 'https://api.remove.bg/v1.0/removebg',
@@ -64,43 +64,26 @@ def handle_photo(message):
                 timeout=30
             )
 
-            # Send debug info to user
-            debug_msg = f"📡 API Status: {response.status_code}\n📄 Content-Type: {response.headers.get('Content-Type', 'unknown')}"
-            bot.send_message(chat_id, debug_msg)
-
             if response.status_code != 200:
-                bot.reply_to(message, f"❌ API Error: {response.status_code}\n\n{response.text[:200]}")
+                bot.reply_to(message, f"❌ API Error: {response.status_code}")
                 return
 
-            # Save and check image
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                tmp.write(response.content)
-                temp_path = tmp.name
+            # 2. Send as PNG document (NOT photo!) to preserve transparency
+            bot.send_document(
+                chat_id,
+                ("image.png", response.content),
+                caption="✅ နောက်ခံဖျက်ပြီးသား PNG ဖိုင်။\n\nSave လုပ်ပြီး Picsart/Photoshop နဲ့ ဖွင့်ကြည့်ပါ။\n\nအခု **နောက်ခံပုံ** ကို ထပ်ပို့ပေးပါ။"
+            )
 
-            img = Image.open(temp_path)
-            mode_msg = f"🖼️ Image Mode: {img.mode}"
-            bot.send_message(chat_id, mode_msg)
-
-            # Force RGBA
-            if img.mode != 'RGBA':
-                img = img.convert('RGBA')
-                img.save(temp_path)
-                bot.send_message(chat_id, "⚠️ Image was not RGBA, converted to RGBA")
-
-            # Send result
-            with open(temp_path, "rb") as f:
-                bot.send_photo(chat_id, f, caption="✅ နောက်ခံဖျက်ပြီးသား PNG။\n\nနောက်ခံပုံထပ်ပို့ပါ။")
-
-            user_foreground_no_bg[chat_id] = img
+            # Store for later
+            user_foreground_no_bg[chat_id] = response.content
             user_state[chat_id] = 1
-            os.unlink(temp_path)
 
         except Exception as e:
-            bot.reply_to(message, f"❌ အမှားဖြစ်သွားသည်။\n\nError: {str(e)[:100]}")
+            bot.reply_to(message, f"❌ Error: {str(e)[:100]}")
             print(f"Error: {e}")
 
     elif state == 1:
-        # ... (background composition code - same as before) ...
         if chat_id not in user_foreground_no_bg:
             bot.reply_to(message, "⚠️ /start နဲ့ ပြန်စပါ။")
             user_state[chat_id] = 0
@@ -113,7 +96,7 @@ def handle_photo(message):
             downloaded_bg = bot.download_file(file_info.file_path)
 
             background = Image.open(io.BytesIO(downloaded_bg)).convert('RGBA')
-            foreground = user_foreground_no_bg[chat_id]
+            foreground = Image.open(io.BytesIO(user_foreground_no_bg[chat_id])).convert('RGBA')
             background = ImageOps.fit(background, foreground.size, method=Image.Resampling.LANCZOS)
             result = Image.alpha_composite(background, foreground)
 
