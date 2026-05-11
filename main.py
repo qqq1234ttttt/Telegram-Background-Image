@@ -8,12 +8,11 @@ from flask import Flask, request, jsonify
 import telebot
 from telebot import types
 
-# ==================== 1. CONFIGURATION ====================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 REMOVE_BG_API_KEY = os.getenv("REMOVE_BG_API_KEY")
 
 if not TELEGRAM_TOKEN or not REMOVE_BG_API_KEY:
-    raise ValueError("Missing TELEGRAM_TOKEN or REMOVE_BG_API_KEY env variable")
+    raise ValueError("Missing TELEGRAM_TOKEN or REMOVE_BG_API_KEY")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
@@ -21,7 +20,6 @@ app = Flask(__name__)
 user_state = {}
 user_foreground_no_bg = {}
 
-# ==================== 2. WEBHOOK ENDPOINT ====================
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
@@ -33,14 +31,13 @@ def webhook():
         print(f"Webhook error: {e}")
         return jsonify({"status": "error"}), 500
 
-# ==================== 3. BOT HANDLERS ====================
 @bot.message_handler(commands=["start", "reset"])
 def start_handler(message):
     chat_id = message.chat.id
     user_state[chat_id] = 0
     if chat_id in user_foreground_no_bg:
         del user_foreground_no_bg[chat_id]
-    bot.send_message(chat_id, "👋 နှုတ်ဆက်ပါတယ်။\n\nနောက်ခံဖျက်ချင်တဲ့ ပုံကို ပို့ပေးပါ။")
+    bot.send_message(chat_id, "👋 နောက်ခံဖျက်ချင်တဲ့ ပုံကို ပို့ပေးပါ။")
 
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
@@ -54,9 +51,8 @@ def handle_photo(message):
             file_info = bot.get_file(message.photo[-1].file_id)
             downloaded_img = bot.download_file(file_info.file_path)
 
-            # ⭐⭐⭐ BASE64 METHOD - FORCE PNG OUTPUT ⭐⭐⭐
+            # BASE64 + FORMAT PNG
             encoded_img = base64.b64encode(downloaded_img).decode('utf-8')
-
             response = requests.post(
                 'https://api.remove.bg/v1.0/removebg',
                 data={
@@ -72,36 +68,27 @@ def handle_photo(message):
                 bot.reply_to(message, f"❌ API Error: {response.status_code}")
                 return
 
-            # Save as PNG
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                 tmp.write(response.content)
                 temp_path = tmp.name
 
-            # Convert to RGBA if needed
-            img = Image.open(temp_path)
-            if img.mode != 'RGBA':
-                img = img.convert('RGBA')
-                img.save(temp_path)
+            img = Image.open(temp_path).convert('RGBA')
+            img.save(temp_path)
 
-            # Send result
             with open(temp_path, "rb") as f:
-                bot.send_photo(
-                    chat_id, 
-                    f, 
-                    caption="✅ နောက်ခံဖျက်ပြီးသား ပုံပါ။\n\n📌 PNG format ဖြစ်ပါတယ်။\n\nအခု **နောက်ခံပုံ** ကို ထပ်ပို့ပေးပါ။"
-                )
+                bot.send_photo(chat_id, f, caption="✅ နောက်ခံဖျက်ပြီးသား PNG။\n\nနောက်ခံပုံထပ်ပို့ပါ။")
 
-            user_foreground_no_bg[chat_id] = Image.open(temp_path).convert('RGBA')
+            user_foreground_no_bg[chat_id] = img
             user_state[chat_id] = 1
             os.unlink(temp_path)
 
         except Exception as e:
-            bot.reply_to(message, f"❌ အမှားဖြစ်သွားပါသည်။ /start နဲ့ ပြန်စပါ။")
+            bot.reply_to(message, "❌ အမှားဖြစ်သွားသည်။ /start ပြန်နှိပ်ပါ။")
             print(f"Error: {e}")
 
     elif state == 1:
         if chat_id not in user_foreground_no_bg:
-            bot.reply_to(message, "⚠️ နောက်ခံဖျက်ပြီးသားပုံ မရှိပါ။ /start နဲ့ ပြန်စပါ။")
+            bot.reply_to(message, "⚠️ /start နဲ့ ပြန်စပါ။")
             user_state[chat_id] = 0
             return
 
@@ -128,7 +115,7 @@ def handle_photo(message):
             user_state[chat_id] = 0
 
         except Exception as e:
-            bot.reply_to(message, "❌ အမှားဖြစ်သွားပါသည်။ /start နဲ့ ပြန်စပါ။")
+            bot.reply_to(message, "❌ အမှားဖြစ်သွားသည်။ /start ပြန်နှိပ်ပါ။")
             print(f"Error: {e}")
             if chat_id in user_foreground_no_bg:
                 del user_foreground_no_bg[chat_id]
@@ -142,11 +129,9 @@ def handle_photo(message):
 def unknown(message):
     bot.reply_to(message, "/start နှိပ်ပါ။")
 
-# ==================== 4. START SERVER ====================
 if __name__ == "__main__":
     bot.remove_webhook()
     port = int(os.environ.get("PORT", "10000"))
     webhook_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')}/webhook"
     bot.set_webhook(url=webhook_url)
-    print(f"Webhook set to: {webhook_url}")
     app.run(host='0.0.0.0', port=port)
