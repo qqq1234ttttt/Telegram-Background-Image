@@ -57,15 +57,15 @@ def handle_photo(message):
             downloaded_img = bot.download_file(file_info.file_path)
 
             # Call Remove.bg API
-            response = requests.post(
-                'https://api.remove.bg/v1.0/removebg',
-                files={'image_file': downloaded_img},
-                data={
-                    'size': 'auto',
-                    'format': 'png'
-                },
-                headers={'X-Api-Key': REMOVE_BG_API_KEY},
-            )
+response = requests.post(
+    'https://api.remove.bg/v1.0/removebg',
+    files={'image_file': downloaded_img},
+    data={
+        'size': 'auto',
+        'format': 'png'           # 1️⃣ PNG format အတိအကျသတ်မှတ်ပါ
+    },
+    headers={'X-Api-Key': REMOVE_BG_API_KEY},
+)
 
             if response.status_code != 200:
                 bot.reply_to(message, f"❌ API Error: {response.status_code}")
