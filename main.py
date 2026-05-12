@@ -19,7 +19,7 @@ app = Flask(__name__)
 
 user_state = {}          # 0 = waiting for format, 1 = waiting for first image, 2 = waiting for background image
 user_format = {}         # store selected format: 'png' or 'jpg'
-user_foreground_no_bg = {}  # store the image content
+user_foreground_no_bg = {}  # store the image content (bytes)
 
 # ==================== WEBHOOK ====================
 @app.route('/webhook', methods=['POST'])
@@ -47,7 +47,7 @@ def start_handler(message):
     btn_jpg = types.KeyboardButton("⚪ နောက်ခံအဖြူ (JPG)")
     markup.add(btn_png, btn_jpg)
     
-    bot.send_message(chat_id, "👋မင်္ဂလာပါ KMT Bot  မှကြိုဆိုပါတယ်။\n\nဘယ်လို Output မျိုး လိုချင်လဲ ရွေးပါ။", reply_markup=markup)
+    bot.send_message(chat_id, "👋မင်္ဂလာပါ KMT Bot မှကြိုဆိုပါတယ်။\n\nဘယ်လို Output မျိုး လိုချင်လဲ ရွေးပါ။", reply_markup=markup)
 
 # ==================== FORMAT SELECTION ====================
 @bot.message_handler(func=lambda m: m.text in ["🔘 နောက်ခံမပါ (PNG - Transparent)", "⚪ နောက်ခံအဖြူ (JPG)"])
@@ -137,19 +137,23 @@ def handle_photo(message):
             file_info = bot.get_file(message.photo[-1].file_id)
             downloaded_bg = bot.download_file(file_info.file_path)
 
-            # Load images
+            # Load background as RGBA
             background = Image.open(io.BytesIO(downloaded_bg)).convert('RGBA')
-            foreground = Image.open(io.BytesIO(user_foreground_no_bg[chat_id])).convert('RGBA')
+            
+            # ⭐ CRITICAL FIX: Load foreground and force convert to RGBA
+            # First, save the stored bytes to a BytesIO object
+            foreground_bytes = io.BytesIO(user_foreground_no_bg[chat_id])
+            foreground = Image.open(foreground_bytes).convert('RGBA')
             
             # Resize background to match foreground
             background = ImageOps.fit(background, foreground.size, method=Image.Resampling.LANCZOS)
             
-            # Composite
+            # Composite (foreground on top of background)
             result = Image.alpha_composite(background, foreground)
 
-            # Save result
+            # Save result as PNG (preserve transparency)
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                result.save(tmp.name)
+                result.save(tmp.name, format='PNG')
                 result_path = tmp.name
 
             # Send final result
@@ -163,7 +167,8 @@ def handle_photo(message):
             user_format[chat_id] = None
 
         except Exception as e:
-            bot.reply_to(message, "❌ အမှားဖြစ်သွားသည်။ /start ပြန်နှိပ်ပါ။")
+            error_msg = f"❌ အမှားဖြစ်သွားသည်။\n\nError: {str(e)[:150]}"
+            bot.reply_to(message, error_msg)
             print(f"Error: {e}")
             if chat_id in user_foreground_no_bg:
                 del user_foreground_no_bg[chat_id]
