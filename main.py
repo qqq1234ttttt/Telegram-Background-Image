@@ -19,7 +19,8 @@ app = Flask(__name__)
 
 user_state = {}          # 0 = waiting for format, 1 = waiting for first image, 2 = waiting for background image
 user_format = {}         # store selected format: 'png' or 'jpg'
-user_foreground_no_bg = {}  # store the image content (bytes)
+user_foreground_bytes = {}  # store the image content (bytes)
+user_foreground_mode = {}   # store the format of foreground ('png' or 'jpg')
 
 # ==================== WEBHOOK ====================
 @app.route('/webhook', methods=['POST'])
@@ -39,8 +40,10 @@ def start_handler(message):
     chat_id = message.chat.id
     user_state[chat_id] = 0
     user_format[chat_id] = None
-    if chat_id in user_foreground_no_bg:
-        del user_foreground_no_bg[chat_id]
+    if chat_id in user_foreground_bytes:
+        del user_foreground_bytes[chat_id]
+    if chat_id in user_foreground_mode:
+        del user_foreground_mode[chat_id]
     
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     btn_png = types.KeyboardButton("🔘 နောက်ခံမပါ (PNG - Transparent)")
@@ -98,26 +101,25 @@ def handle_photo(message):
                 bot.reply_to(message, f"❌ API Error: {response.status_code}")
                 return
 
-            # Store the image content for later use (background composition)
-            user_foreground_no_bg[chat_id] = response.content
+            # Store the image content and its format
+            user_foreground_bytes[chat_id] = response.content
+            user_foreground_mode[chat_id] = output_format
 
             # Send result based on format
             if output_format == "png":
-                # Send as DOCUMENT to preserve transparency
                 bot.send_document(
                     chat_id,
                     ("foreground.png", response.content),
                     caption="✅ နောက်ခံဖျက်ပြီးသား **PNG (Transparent)** ဖိုင်။\n\nSave လုပ်ပြီး Picsart/Photoshop နဲ့ ဖွင့်ကြည့်ပါ။\n\nအခု **နောက်ခံပုံ** ကို ထပ်ပို့ပေးပါ။"
                 )
             else:
-                # Send as PHOTO (JPG with white background)
                 bot.send_photo(
                     chat_id,
                     response.content,
                     caption="✅ နောက်ခံဖျက်ပြီးသား **JPG (နောက်ခံအဖြူ)** ပုံ။\n\nအခု **နောက်ခံပုံ** ကို ထပ်ပို့ပေးပါ။"
                 )
 
-            user_state[chat_id] = 2  # wait for background image
+            user_state[chat_id] = 2
 
         except Exception as e:
             bot.reply_to(message, f"❌ Error: {str(e)[:100]}")
@@ -125,7 +127,7 @@ def handle_photo(message):
 
     # Case: Waiting for background image (after getting foreground)
     elif state == 2:
-        if chat_id not in user_foreground_no_bg:
+        if chat_id not in user_foreground_bytes:
             bot.reply_to(message, "⚠️ /start နဲ့ ပြန်စပါ။")
             user_state[chat_id] = 0
             return
@@ -140,18 +142,34 @@ def handle_photo(message):
             # Load background as RGBA
             background = Image.open(io.BytesIO(downloaded_bg)).convert('RGBA')
             
-            # ⭐ CRITICAL FIX: Load foreground and force convert to RGBA
-            # First, save the stored bytes to a BytesIO object
-            foreground_bytes = io.BytesIO(user_foreground_no_bg[chat_id])
-            foreground = Image.open(foreground_bytes).convert('RGBA')
+            # Load foreground based on its original format
+            foreground_bytes_io = io.BytesIO(user_foreground_bytes[chat_id])
+            foreground_mode = user_foreground_mode[chat_id]
             
+            if foreground_mode == "png":
+                # PNG has transparency
+                foreground = Image.open(foreground_bytes_io).convert('RGBA')
+            else:
+                # JPG (white background) - need to extract the subject
+                # Load as RGB, then create mask from white background
+                foreground_rgb = Image.open(foreground_bytes_io).convert('RGB')
+                # Create a mask where white pixels become transparent
+                # This is NOT perfect but works for simple white backgrounds
+                foreground = foreground_rgb.convert('RGBA')
+                pixels = foreground.load()
+                for y in range(foreground.size[1]):
+                    for x in range(foreground.size[0]):
+                        r, g, b, a = pixels[x, y]
+                        # If pixel is close to white, make it transparent
+                        if r > 240 and g > 240 and b > 240:
+                            pixels[x, y] = (r, g, b, 0)
             # Resize background to match foreground
             background = ImageOps.fit(background, foreground.size, method=Image.Resampling.LANCZOS)
             
-            # Composite (foreground on top of background)
+            # Composite
             result = Image.alpha_composite(background, foreground)
 
-            # Save result as PNG (preserve transparency)
+            # Save result as PNG (preserve quality)
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                 result.save(tmp.name, format='PNG')
                 result_path = tmp.name
@@ -162,7 +180,8 @@ def handle_photo(message):
 
             # Cleanup
             os.unlink(result_path)
-            del user_foreground_no_bg[chat_id]
+            del user_foreground_bytes[chat_id]
+            del user_foreground_mode[chat_id]
             user_state[chat_id] = 0
             user_format[chat_id] = None
 
@@ -170,8 +189,10 @@ def handle_photo(message):
             error_msg = f"❌ အမှားဖြစ်သွားသည်။\n\nError: {str(e)[:150]}"
             bot.reply_to(message, error_msg)
             print(f"Error: {e}")
-            if chat_id in user_foreground_no_bg:
-                del user_foreground_no_bg[chat_id]
+            if chat_id in user_foreground_bytes:
+                del user_foreground_bytes[chat_id]
+            if chat_id in user_foreground_mode:
+                del user_foreground_mode[chat_id]
             user_state[chat_id] = 0
 
     else:
